@@ -123,6 +123,9 @@ pub fn codegen_expressions<'ctx>(ctx: &mut CodeGenContext<'ctx>, expr: &Expr, re
             let l_val = codegen_expressions(ctx, left, registry)?;
             let r_val = codegen_expressions(ctx, right, registry)?;
 
+            // ADD STRING (PointerValue) SUPPORT !! 
+            // Only supports Int and Float values right now :(
+
             match (l_val, r_val) {
                 (BasicValueEnum::FloatValue(lf), BasicValueEnum::FloatValue(rf)) => {
                     let res = match op {

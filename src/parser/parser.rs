@@ -197,7 +197,7 @@ impl Parser {
 
     fn parse_if_statement(&mut self) -> Result<Statement, String> {
         //self.expect_keyword(Keyword::If)?;
-        //println!("a");
+        println!("a");
         self.expect_symbol(Symbols::LParen)?;
        
         let condition = self.parse_expr()?;
