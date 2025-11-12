@@ -10,5 +10,9 @@
 include adan.native.io;
 
 program -> main {
-	io.printf("ADAN compiled and ran successfully.");
+	local sample: String = "Hello, world!";
+
+	if (sample = "Hello, world!") {
+		io.printf(sample);
+	}
 }
