@@ -1,14 +1,21 @@
 use crate::lexer::token::*;
 use crate::parser::ast::*;
+use crate::code_gen::statements::load_native_registry;
+use std::collections::HashSet;
 
 pub struct Parser {
     tokens: Vec<Token>,
     pos: usize,
+    imported_modules: HashSet<String>,
 }
 
 impl Parser {
     pub fn new(tokens: Vec<Token>) -> Self {
-        Self { tokens, pos: 0 }
+        Self {
+            tokens,
+            pos: 0,
+            imported_modules: HashSet::new(),
+        }
     }
 
     fn peek(&self) -> Option<&Token> {
@@ -49,6 +56,7 @@ impl Parser {
     }
 
     fn expect_symbol(&mut self, sym: Symbols) -> Result<(), String> {
+        //println!("testing symbol: {:?}", sym);
         if self.match_symbol(sym) {
             Ok(())
         } else {
@@ -127,19 +135,12 @@ impl Parser {
     }
 
     fn parse_include(&mut self) -> Result<Statement, String> {
-        // self.expect_keyword(Keyword::Include)?;
+        let module_name = self.expect_ident()?;
 
-        let mut path = String::new();
-        loop {
-            match self.next().ok_or("Unexpected EOF in include")? {
-                Token::Ident(s) => path.push_str(&s),
-                Token::Symbols(Symbols::Period) => path.push('.'),
-                Token::Symbols(Symbols::SemiColon) => break,
-                tok => return Err(format!("Unexpected token in include: {:?}", tok)),
-            }
-        }
+        self.imported_modules.insert(module_name.clone());
+        self.expect_symbol(Symbols::SemiColon)?;
 
-        Ok(Statement::Include(path))
+        Ok(Statement::Include(module_name))
     }
 
     fn parse_return(&mut self) -> Result<Statement, String> {
@@ -197,10 +198,11 @@ impl Parser {
 
     fn parse_if_statement(&mut self) -> Result<Statement, String> {
         //self.expect_keyword(Keyword::If)?;
-        println!("a");
+        //println!("a");
         self.expect_symbol(Symbols::LParen)?;
        
         let condition = self.parse_expr()?;
+        //println!("condition parsed: {:?}", condition);
        
         self.expect_symbol(Symbols::RParen)?;
         //self.expect_symbol(Symbols::LCurlyBracket)?;
@@ -240,6 +242,7 @@ impl Parser {
             None
         };
 
+        //println!("var_type: {:?}", var_type);
         let initializer = if self.match_keyword(Keyword::Assign) {
             Some(self.parse_expr()?)
         } else {
@@ -337,55 +340,80 @@ impl Parser {
         }
     }
 
+    // fix this later pls so methods (like .to_string()) work :(
     fn parse_primary(&mut self) -> Result<Expr, String> {
-        match self.peek().cloned() {
-            Some(Token::Number(n)) => {
-                let value = n.parse::<f64>().unwrap_or(0.0);
-                self.next();
-                Ok(Expr::Literal(Literal::Number(value)))
-            }
-            Some(Token::Literal(s)) => {
-                self.next();
-                Ok(Expr::Literal(Literal::String(s)))
-            }
-            Some(Token::CharLiteral(c)) => {
-                self.next();
-                Ok(Expr::Literal(Literal::Char(c)))
-            }
+        let mut base_expr = match self.peek().cloned() {
+            Some(Token::Float(n)) => { self.next(); Expr::Literal(Literal::Float(n)) },
+            Some(Token::Integer(n)) => { self.next(); Expr::Literal(Literal::Integer(n)) },
+            Some(Token::Literal(s)) => { self.next(); Expr::Literal(Literal::String(s)) },
+            Some(Token::CharLiteral(c)) => { self.next(); Expr::Literal(Literal::Char(c)) },
             Some(Token::Ident(name)) => {
-                let mut base = name.clone();
                 self.next();
-                while self.match_symbol(Symbols::Period) {
-                    let member = self.expect_ident()?;
-                    base = format!("{}.{}", base, member);
-                }
-
-                if self.match_symbol(Symbols::LParen) { // (
-                    let mut args = Vec::new();
-                    if !self.match_symbol(Symbols::RParen) {
-                        loop {
-                            args.push(self.parse_expr()?);
-                            if self.match_symbol(Symbols::RParen) {
-                                break;
-                            }
-
-                            self.expect_symbol(Symbols::Comma)?; // (<param_1>, <param_2>, ...)
-                        }
+                
+                if self.imported_modules.contains(&name) {
+                    let mut module_name = name;
+                    while self.match_symbol(Symbols::Period) {
+                        let func_name = self.expect_ident()?;
+                        module_name = format!("{}.{}", module_name, func_name);
                     }
 
-                    Ok(Expr::FCall { callee: base, args })
+                    if self.match_symbol(Symbols::LParen) {
+                        let args = self.parse_args()?;
+                        Expr::FCall {
+                            callee: module_name,
+                            args
+                        }
+                    } else {
+                        return Err("Cannot use module by itself".into());
+                    }
                 } else {
-                    Ok(Expr::Variable { var_name: base, var_type: None }) // `if (<var>) {}` instead of `if (<var>: String) {}`
+                    Expr::Variable {
+                        var_name: name.clone(),
+                        var_type: None
+                    }
                 }
             }
-            Some(Token::Symbols(Symbols::LParen)) => { // Opening part of the if statement
+            Some(Token::Symbols(Symbols::LParen)) => {
                 self.next();
                 let expr = self.parse_expr()?;
                 self.expect_symbol(Symbols::RParen)?;
-                Ok(expr)
+                expr
             }
-            other => Err(format!("Unexpected token in primary expression: {:?}", other))
+            other => return Err(format!("Unexpected token in primary expression: {:?}", other))
+        };
+
+        while self.match_symbol(Symbols::Period) {
+            let method_name = self.expect_ident()?;
+            let args = if self.match_symbol(Symbols::LParen) {
+                self.parse_args()?
+            } else {
+                Vec::new()
+            };
+
+            base_expr = Expr::MethodCall {
+                object: Box::new(base_expr),
+                method_name,
+                args,
+            };
         }
+
+        Ok(base_expr)
+    }
+
+    fn parse_args(&mut self) -> Result<Vec<Expr>, String> {
+        let mut args = Vec::new();
+        if !self.match_symbol(Symbols::RParen) {
+            loop {
+                args.push(self.parse_expr()?);
+                if self.match_symbol(Symbols::RParen) {
+                    break;
+                }
+                
+                self.expect_symbol(Symbols::Comma)?;
+            }
+        }
+
+        Ok(args)
     }
 
     // ------------------------
