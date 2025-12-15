@@ -423,24 +423,47 @@ void analyze_break(ASTNode* break_node, SymbolTable* table) {
 
 void analyze_declaration(ASTNode* declaration_node, SymbolTable* table) {
 	if (!declaration_node || !table) return;
+	if (declaration_node->child_count > 0 && declaration_node->children[0]) {
+		/* Declaration node present */
+	}
 
 	ASTNode* identifier_node = declaration_node->children[0];
 	ASTNode* type_node = declaration_node->children[1];
 
-	Type expected_type = get_expression_type(type_node, table);
+	Type base_type = get_expression_type(type_node, table);
+	bool is_array_decl = (identifier_node->type == AST_ARRAY_DECL);
+	Type symbol_type = is_array_decl ? TYPE_ARRAY : base_type;
+
 	if (declaration_node->child_count >= 3) {
 		ASTNode* expression_node = declaration_node->children[2];
 	
 		analyze_expression(expression_node, table);
 	
 		Type actual_type = get_expression_type(expression_node, table);
-		if (actual_type != expected_type) {
-			semantic_error(declaration_node, SemanticErrorMessages[SEMANTIC_TYPE_MISMATCH], type_node->token.text, expression_node->token.text);
-			return;
+
+		if (is_array_decl) {
+			// initializer must be an array literal and element type must match base_type
+			if (expression_node->type != AST_ARRAY_LITERAL) {
+				semantic_error(declaration_node, SemanticErrorMessages[SEMANTIC_TYPE_MISMATCH], "array", expression_node->token.text ? expression_node->token.text : "value");
+				return;
+			}
+
+			if (expression_node->child_count > 0) {
+				Type first_elem_type = get_expression_type(expression_node->children[0], table);
+					if (first_elem_type != base_type) {
+					semantic_error(declaration_node, SemanticErrorMessages[SEMANTIC_TYPE_MISMATCH], type_node->token.text, expression_node->children[0]->token.text);
+					return;
+				}
+			}
+		} else {
+			if (actual_type != base_type) {
+				semantic_error(declaration_node, SemanticErrorMessages[SEMANTIC_TYPE_MISMATCH], type_node->token.text, expression_node->token.text);
+				return;
+			}
 		}
 	}
 
-	add_symbol(table, identifier_node->token.text, expected_type, declaration_node);
+	add_symbol(table, identifier_node->token.text, symbol_type, declaration_node);
 }
 
 // 
@@ -465,7 +488,8 @@ void analyze_assignment(ASTNode* assignment_node, SymbolTable* table) {
 	// 
 	//  STRICT: No implicit type conversion in assignment
 	// 
-	if (identifier_symbol->type != expression_type) {
+	if (!check_type_compatibility(identifier_symbol->type, expression_type)) {
+		semantic_error(assignment_node, SemanticErrorMessages[SEMANTIC_TYPE_MISMATCH], type_to_string(expression_type), type_to_string(identifier_symbol->type));
 		return;
 	}
 }
@@ -748,20 +772,46 @@ Type analyze_array_access(ASTNode* node, SymbolTable* table) {
 	ASTNode* array_node = node->children[0];
 	ASTNode* index_node = node->children[1];
 
-	Type array_type = get_expression_type(array_node, table);
-
-	if (array_type != TYPE_ARRAY) {
-		semantic_error(node, SemanticErrorMessages[SEMANTIC_INVALID_ARRAY_ACCESS], array_node->token.text ? array_node->token.text : "unknown");
-		return TYPE_UNKNOWN;
-	}
-
+	// Ensure index expression is valid
+	analyze_expression(index_node, table);
 	Type index_type = get_expression_type(index_node, table);
-
 	if (index_type != TYPE_INT) {
 		semantic_error(node, SemanticErrorMessages[SEMANTIC_ARRAY_INDEX_NOT_INTEGER], "non-integer");
 		return TYPE_UNKNOWN;
 	}
 
+	// If the array expression is an identifier, look up its declaration to find element type
+	if (array_node->type == AST_IDENTIFIER) {
+		Symbol* sym = lookup_symbol(table, array_node->token.text);
+		if (!sym) {
+			semantic_error(node, SemanticErrorMessages[SEMANTIC_UNKNOWN_VARIABLE], array_node->token.text);
+			return TYPE_UNKNOWN;
+		}
+
+		if (sym->type != TYPE_ARRAY) {
+			semantic_error(node, SemanticErrorMessages[SEMANTIC_INVALID_ARRAY_ACCESS], array_node->token.text ? array_node->token.text : "unknown");
+			return TYPE_UNKNOWN;
+		}
+
+		ASTNode* decl = sym->node;
+		if (!decl || decl->type != AST_DECLARATION) return TYPE_UNKNOWN;
+
+		ASTNode* type_node = decl->children[1];
+		Type elem_type = get_expression_type(type_node, table);
+		annotate_node_type(node, elem_type);
+		return elem_type;
+	}
+
+	// If the array expression is an array literal, infer element type from its first element
+	if (array_node->type == AST_ARRAY_LITERAL) {
+		if (array_node->child_count == 0) return TYPE_UNKNOWN;
+		Type elem_type = get_expression_type(array_node->children[0], table);
+		annotate_node_type(node, elem_type);
+		return elem_type;
+	}
+
+	// Otherwise, fall back to unknown
+	annotate_node_type(node, TYPE_UNKNOWN);
 	return TYPE_UNKNOWN;
 }
 
@@ -1157,6 +1207,13 @@ Type get_expression_type(ASTNode* expr_node, SymbolTable* table) {
 	if (expr_node->type == AST_ARRAY_LITERAL) {
 		annotate_node_type(expr_node, TYPE_ARRAY);
 		return TYPE_ARRAY;
+	}
+
+	if (expr_node->type == AST_ARRAY_ACCESS) {
+		// Resolve element type for array access (e.g., n[0] -> int)
+		Type elem = analyze_array_access(expr_node, table);
+		annotate_node_type(expr_node, elem);
+		return elem;
 	}
 
 	if (expr_node->type == AST_FUNCTION_CALL) {

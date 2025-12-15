@@ -10,6 +10,16 @@
 #include "logs.h"
 
 static ASTNode* parse_single_comment(Parser* parser);
+ASTNode* parse_array_literal(Parser* parser);
+
+void debug_token(Parser* parser, const char* msg) {
+    if (parser->current_token.text) {
+        printf("DEBUG: %s | current token: '%s' (%d)\n", msg, parser->current_token.text, parser->current_token.type);
+    } else {
+        printf("DEBUG: %s | current token: (null) (%d)\n", msg, parser->current_token.type);
+    }
+}
+
 
 void init_parser(Parser* parser, Lexer* lexer) {
 	parser->lexer = lexer;
@@ -595,86 +605,166 @@ ASTNode* parse_params(Parser* parser) {
 }
 
 ASTNode* parse_declaration(Parser* parser) {
-	Token identifier_token = parser->current_token;
-	if (identifier_token.text) {
-		identifier_token.text = strdup(identifier_token.text);
-	}
+    printf("DEBUG: Starting parse_declaration | current token: '%s' (%d)\n", parser->current_token.text, parser->current_token.type);
 
-	if (!expect(parser, TOKEN_IDENTIFIER, PARSER_EXPECTED, "identifier", parser->current_token.text)) {
-		if (identifier_token.text) free(identifier_token.text);
-		return NULL;
-	}
-	if (!expect(parser, TOKEN_TYPE_DECL, PARSER_EXPECTED, "'::'", parser->current_token.text)) {
-		if (identifier_token.text) free(identifier_token.text);
-		return NULL;
-	}
+    // Copy identifier
+    Token id_token = parser->current_token;
+    id_token.text = strdup(parser->current_token.text);
+    if (!expect(parser, TOKEN_IDENTIFIER, PARSER_EXPECTED, "identifier", parser->current_token.text)) {
+        free(id_token.text);
+        return NULL;
+    }
+    printf("DEBUG: After identifier | current token: '%s' (%d)\n", parser->current_token.text, parser->current_token.type);
 
-	Token type_token = parser->current_token;
-	if (type_token.text) {
-		type_token.text = strdup(type_token.text);
-	}
-	
-	if (!match(parser, TOKEN_INT) && !match(parser, TOKEN_FLOAT) &&
-		!match(parser, TOKEN_STRING) && !match(parser, TOKEN_BOOLEAN) &&
-		!match(parser, TOKEN_CHAR) && !match(parser, TOKEN_NULL) &&
-		!match(parser, TOKEN_VOID)) {
-			if (identifier_token.text) free(identifier_token.text);
-			if (type_token.text) free(type_token.text);
-			set_error(parser, PARSER_EXPECTED, "type declaration", parser->current_token.text);
-			return NULL;
-	}
+    if (!expect(parser, TOKEN_TYPE_DECL, PARSER_EXPECTED, "'::'", parser->current_token.text)) {
+        free(id_token.text);
+        return NULL;
+    }
+    printf("DEBUG: After '::' | current token: '%s' (%d)\n", parser->current_token.text, parser->current_token.type);
 
-	ASTNode* identifier = create_ast_node(AST_IDENTIFIER, identifier_token);
-	ASTNode* type = create_ast_node(AST_TYPE, type_token);
+    // Type
+    Token type_token = parser->current_token;
+    type_token.text = strdup(parser->current_token.text);
+    if (!match(parser, TOKEN_INT) && !match(parser, TOKEN_FLOAT) &&
+        !match(parser, TOKEN_STRING) && !match(parser, TOKEN_BOOLEAN) &&
+        !match(parser, TOKEN_CHAR) && !match(parser, TOKEN_NULL) &&
+        !match(parser, TOKEN_VOID)) {
+        free(id_token.text);
+        free(type_token.text);
+        set_error(parser, PARSER_EXPECTED, "type declaration", parser->current_token.text);
+        return NULL;
+    }
+    printf("DEBUG: After type | current token: '%s' (%d)\n", parser->current_token.text, parser->current_token.type);
 
-	if (!identifier || !type) 
-	{
-		set_error(parser, PARSER_FAILED_AST, "assignment AST nodes");
-		return NULL;
-	}
+    ASTNode* size_expr = NULL;
+    int is_array_type = 0;
 
-	ASTNode* assignment_node = create_ast_node(AST_DECLARATION, identifier_token);
+    // Parse array size in type: e.g., int[5] or int[]
+    if (parser->current_token.type == TOKEN_LBRACKET) {
+        is_array_type = 1;
+        printf("DEBUG: Found '[' for array type | current token: '%s' (%d)\n", parser->current_token.text, parser->current_token.type);
+        match(parser, TOKEN_LBRACKET);
 
-	if (parser->current_token.type == TOKEN_ASSIGN) {
-		match(parser, TOKEN_ASSIGN);
+        if (parser->current_token.type != TOKEN_RBRACKET) {
+            size_expr = parse_expression(parser);
+            if (!size_expr) {
+                free(id_token.text);
+                free(type_token.text);
+                set_error(parser, PARSER_EXPECTED, "array size expression", parser->current_token.text);
+                return NULL;
+            }
+        }
 
-		ASTNode* expression = parse_expression(parser);
-		if (!expression) {
-			set_error(parser, PARSER_EXPECTED, "expression", parser->current_token.text);
-			free_ast(identifier);
-			free_ast(type);
-			free_ast(assignment_node);
-			return NULL;
-		}
+        if (!expect(parser, TOKEN_RBRACKET, PARSER_EXPECTED, "']'", parser->current_token.text)) {
+            free(id_token.text);
+            free(type_token.text);
+            if (size_expr) free_ast(size_expr);
+            return NULL;
+        }
+        printf("DEBUG: Finished array type brackets | current token: '%s' (%d)\n", parser->current_token.text, parser->current_token.type);
+    }
 
-		if (!expect(parser, TOKEN_SEMICOLON, PARSER_EXPECTED, "';'", parser->current_token.text)) {
-			free_ast(identifier);
-			free_ast(type);
-			free_ast(expression);
-			free_ast(assignment_node);
-			return NULL;
-		}
+    ASTNode* identifier_node = create_ast_node(AST_IDENTIFIER, id_token);
+    ASTNode* type_node = create_ast_node(AST_TYPE, type_token);
 
-		assignment_node->child_count = 3;
-		assignment_node->children = malloc(sizeof(ASTNode*) * 3);
-		assignment_node->children[0] = identifier;
-		assignment_node->children[1] = type;
-		assignment_node->children[2] = expression;
-	} else {
-		if (!expect(parser, TOKEN_SEMICOLON, PARSER_EXPECTED, "';'", parser->current_token.text)) {
-			free_ast(identifier);
-			free_ast(type);
-			free_ast(assignment_node);
-			return NULL;
-		}
+    if (is_array_type) {
+        ASTNode* array_node = create_ast_node(AST_ARRAY_DECL, id_token);
+        array_node->child_count = 2;
+        array_node->children = malloc(sizeof(ASTNode*) * 2);
+        array_node->children[0] = identifier_node;
+        array_node->children[1] = size_expr; /* may be NULL for [] */
+        identifier_node = array_node;
+    }
 
-		assignment_node->child_count = 2;
-		assignment_node->children = malloc(sizeof(ASTNode*) * 2);
-		assignment_node->children[0] = identifier;
-		assignment_node->children[1] = type;
-	}
+    ASTNode* declaration_node = create_ast_node(AST_DECLARATION, id_token);
 
-	return assignment_node;
+    // Parse initializer
+    ASTNode* value_node = NULL;
+    if (parser->current_token.type == TOKEN_ASSIGN) {
+        match(parser, TOKEN_ASSIGN);
+        printf("DEBUG: Parsing initializer after '=' | current token: '%s' (%d)\n", parser->current_token.text, parser->current_token.type);
+
+        if (parser->current_token.type == TOKEN_LBRACKET) {
+            value_node = parse_array_literal(parser);
+        } else {
+            value_node = parse_expression(parser);
+        }
+
+        if (!value_node) return NULL;
+
+        if (!expect(parser, TOKEN_SEMICOLON, PARSER_EXPECTED, "';'", parser->current_token.text)) {
+            free_ast(identifier_node);
+            free_ast(type_node);
+            free_ast(value_node);
+            free_ast(declaration_node);
+            return NULL;
+        }
+
+        declaration_node->child_count = 3;
+        declaration_node->children = malloc(sizeof(ASTNode*) * 3);
+        declaration_node->children[0] = identifier_node;
+        declaration_node->children[1] = type_node;
+        declaration_node->children[2] = value_node;
+    } else {
+        // No initializer
+        if (!expect(parser, TOKEN_SEMICOLON, PARSER_EXPECTED, "';'", parser->current_token.text)) {
+            free_ast(identifier_node);
+            free_ast(type_node);
+            free_ast(declaration_node);
+            return NULL;
+        }
+
+        declaration_node->child_count = 2;
+        declaration_node->children = malloc(sizeof(ASTNode*) * 2);
+        declaration_node->children[0] = identifier_node;
+        declaration_node->children[1] = type_node;
+    }
+
+    printf("DEBUG: Finished parse_declaration | current token: '%s' (%d)\n", parser->current_token.text, parser->current_token.type);
+    return declaration_node;
+}
+
+ASTNode* parse_array_literal(Parser* parser) {
+    printf("DEBUG: Entering parse_array_literal | current token: '%s' (%d)\n", parser->current_token.text, parser->current_token.type);
+
+    if (!expect(parser, TOKEN_LBRACKET, PARSER_EXPECTED, "'['", parser->current_token.text)) {
+        return NULL;
+    }
+
+    ASTNode* array_node = create_ast_node(AST_ARRAY_LITERAL, parser->current_token);
+    array_node->child_count = 0;
+    array_node->children = NULL;
+
+    while (parser->current_token.type != TOKEN_RBRACKET && parser->current_token.type != TOKEN_EOF) {
+        printf("DEBUG: Parsing array element | current token: '%s' (%d)\n", parser->current_token.text, parser->current_token.type);
+
+        ASTNode* element = parse_expression(parser);
+        if (!element) {
+            set_error(parser, PARSER_EXPECTED, "array element expression", parser->current_token.text);
+            free_ast(array_node);
+            return NULL;
+        }
+
+        ASTNode** tmp = realloc(array_node->children, sizeof(ASTNode*) * (array_node->child_count + 1));
+        if (!tmp) { set_error(parser, PARSER_ALLOCATION_FAILURE, "array elements"); free_ast(element); free_ast(array_node); return NULL; }
+        array_node->children = tmp;
+        array_node->children[array_node->child_count++] = element;
+
+        if (parser->current_token.type == TOKEN_COMMA) {
+            match(parser, TOKEN_COMMA);
+            printf("DEBUG: Found comma, continuing array literal | current token: '%s' (%d)\n", parser->current_token.text, parser->current_token.type);
+        } else {
+            break;
+        }
+    }
+
+    if (!expect(parser, TOKEN_RBRACKET, PARSER_EXPECTED, "']'", parser->current_token.text)) {
+        free_ast(array_node);
+        return NULL;
+    }
+
+    printf("DEBUG: Finished parse_array_literal | current token: '%s' (%d)\n", parser->current_token.text, parser->current_token.type);
+    return array_node;
 }
 
 ASTNode* parse_assignment(Parser* parser) {
@@ -1043,8 +1133,12 @@ ASTNode* parse_for_statement(Parser* parser) {
 	Token type_token = parser->current_token;
 	if (type_token.text) type_token.text = strdup(type_token.text);
 	match(parser, t);
-   
-	if (!expect(parser, TOKEN_ASSIGN, PARSER_EXPECTED, "'='", parser->current_token.text)) {
+
+	// Arrays; I am really trying to avoid AI and trying to have a indepth understanding of the codebase and I may not be thinking straight.
+	while (!expect(parser, TOKEN_ASSIGN, PARSER_EXPECTED, "'='", parser->current_token.text)) {
+		if (!expect(parser, TOKEN_LBRACKET, PARSER_EXPECTED, "'['", parser->current_token.text)) {
+			continue;
+		}
 		if (id_token.text) free(id_token.text);
 		if (type_token.text) free(type_token.text);
 		return NULL;
@@ -1375,321 +1469,278 @@ ASTNode* parse_identifier(Parser* parser) {
 }
 
 ASTNode* parse_primary(Parser* parser) {
-	TokenType type = parser->current_token.type;
-	ASTNode* primary_node = NULL;
+    TokenType type = parser->current_token.type;
+    ASTNode* primary_node = NULL;
+	ASTNode* array_node = NULL;
 
-	switch (type) {
-		case TOKEN_IDENTIFIER: {
-			Token id_token = parser->current_token;
-			if (id_token.text) id_token.text = strdup(id_token.text);
-			match(parser, TOKEN_IDENTIFIER);
-			
-			if (parser->current_token.type == TOKEN_LPAREN) {
-				match(parser, TOKEN_LPAREN);
-				ASTNode* call_node = create_ast_node(AST_FUNCTION_CALL, id_token);
-				ASTNode* identifier_node = create_ast_node(AST_IDENTIFIER, id_token);
-				
-				ASTNode* args = create_ast_node(AST_PARAMS, parser->current_token);
-				args->child_count = 0;
-				args->children = NULL;
+    switch (parser->current_token.type) {
+        case TOKEN_LBRACKET:
+            primary_node = parse_array_literal(parser);
+            break;
 
-				if (parser->current_token.type != TOKEN_RPAREN) {
-					while (1) {
-						ASTNode* expr = parse_expression(parser);
-						if (!expr) {
-							free_ast(identifier_node);
-							free_ast(args);
-							free(call_node);
-							return NULL;
-						}
+        case TOKEN_IDENTIFIER: {
+            Token id_token = parser->current_token;
+            if (id_token.text) id_token.text = strdup(id_token.text);
+            match(parser, TOKEN_IDENTIFIER);
 
-						ASTNode** tmp = realloc(args->children, sizeof(ASTNode*) * (args->child_count + 1));
-						if (!tmp) {
-							free_ast(expr);
-							free_ast(identifier_node);
-							free_ast(args);
-							free(call_node);
-							return NULL;
-						}
-						args->children = tmp;
-						args->children[args->child_count++] = expr;
+            // Function call
+            if (parser->current_token.type == TOKEN_LPAREN) {
+                match(parser, TOKEN_LPAREN);
+                ASTNode* call_node = create_ast_node(AST_FUNCTION_CALL, id_token);
+                ASTNode* identifier_node = create_ast_node(AST_IDENTIFIER, id_token);
 
-						if (parser->current_token.type == TOKEN_COMMA) {
-							match(parser, TOKEN_COMMA);
-							continue;
-						}
-						break;
-					}
-				}
+                ASTNode* args = create_ast_node(AST_PARAMS, parser->current_token);
+                args->child_count = 0;
+                args->children = NULL;
 
-				if (!expect(parser, TOKEN_RPAREN, PARSER_EXPECTED, "')'", parser->current_token.text)) {
-					free_ast(identifier_node);
-					free_ast(args);
-					free(call_node);
-					return NULL;
-				}
+                if (parser->current_token.type != TOKEN_RPAREN) {
+                    while (1) {
+                        ASTNode* expr = parse_expression(parser);
+                        if (!expr) {
+                            free_ast(identifier_node);
+                            free_ast(args);
+                            free(call_node);
+                            return NULL;
+                        }
 
-				call_node->child_count = 2;
-				call_node->children = malloc(sizeof(ASTNode*) * 2);
-				call_node->children[0] = identifier_node;
-				call_node->children[1] = args;
+                        ASTNode** tmp = realloc(args->children, sizeof(ASTNode*) * (args->child_count + 1));
+                        if (!tmp) { free_ast(expr); free_ast(identifier_node); free_ast(args); free(call_node); return NULL; }
+                        args->children = tmp;
+                        args->children[args->child_count++] = expr;
 
-				return call_node;
-			}
-			
-			ASTNode* identifier_node = create_ast_node(AST_IDENTIFIER, id_token);
+                        if (parser->current_token.type == TOKEN_COMMA) {
+                            match(parser, TOKEN_COMMA);
+                        } else break;
+                    }
+                }
 
-			if (parser->current_token.type == TOKEN_INCREMENT || parser->current_token.type == TOKEN_DECREMENT) {
-				Token inc_op_token = parser->current_token;
-				if (inc_op_token.text) inc_op_token.text = strdup(inc_op_token.text);
-				match(parser, parser->current_token.type);
+                if (!expect(parser, TOKEN_RPAREN, PARSER_EXPECTED, "')'", parser->current_token.text)) {
+                    free_ast(identifier_node); free_ast(args); free(call_node); return NULL;
+                }
 
-				ASTNode* inc_op_node = create_ast_node(AST_OPERATORS, inc_op_token);
-				ASTNode* increment_node = create_ast_node(AST_INCREMENT_EXPR, (Token){0});
-				increment_node->child_count = 2;
-				increment_node->children = malloc(sizeof(ASTNode*) * 2);
-				increment_node->children[0] = identifier_node;
-				increment_node->children[1] = inc_op_node;
-				return increment_node;
-			}
-			return identifier_node;
-		}
-		case TOKEN_INT_LITERAL:
-		case TOKEN_FLOAT_LITERAL: {
-			Token tok = parser->current_token;
-			if (tok.text) tok.text = strdup(tok.text);
-			match(parser, type);
-			primary_node = create_ast_node(AST_LITERAL, tok);
-			break;
-		}
+                call_node->child_count = 2;
+                call_node->children = malloc(sizeof(ASTNode*) * 2);
+                call_node->children[0] = identifier_node;
+                call_node->children[1] = args;
+                // don't return here; allow postfix operations and indexing on the call result
+                primary_node = call_node;
+            }
 
-		case TOKEN_TRUE:
-		case TOKEN_FALSE: {
-			Token tok = parser->current_token;
-			if (tok.text) tok.text = strdup(tok.text);
-			match(parser, type);
-			primary_node = create_ast_node(AST_LITERAL, tok);
-			break;
-		}
+            // Identifier only (if we didn't create a call node)
+            if (primary_node == NULL) {
+                primary_node = create_ast_node(AST_IDENTIFIER, id_token);
+            }
 
-		case TOKEN_STRING: {
-			Token tok = parser->current_token;
-			if (tok.text) tok.text = strdup(tok.text);
-			match(parser, TOKEN_STRING);
+            // Array indexing (postfix), allow chained indexing like a[0][1]
+            while (parser->current_token.type == TOKEN_LBRACKET) {
+                match(parser, TOKEN_LBRACKET);
+                ASTNode* idx = parse_expression(parser);
+                if (!idx) { free_ast(primary_node); return NULL; }
+                if (!expect(parser, TOKEN_RBRACKET, PARSER_EXPECTED, "']'", parser->current_token.text)) { free_ast(primary_node); free_ast(idx); return NULL; }
 
-			char* s = tok.text ? tok.text : "";
-			int len = strlen(s);
-			int has_interp = 0;
-			for (int i = 0; i < len - 1; i++) {
-				if (s[i] == '$' && s[i+1] == '{') { has_interp = 1; break; }
-			}
+                ASTNode* access = create_ast_node(AST_ARRAY_ACCESS, (Token){0});
+                access->child_count = 2;
+                access->children = malloc(sizeof(ASTNode*) * 2);
+                access->children[0] = primary_node;
+                access->children[1] = idx;
+                primary_node = access;
+            }
 
-			if (!has_interp) {
-				primary_node = create_ast_node(AST_LITERAL, tok);
-				break;
-			}
+            // Postfix increment/decrement
+            if (parser->current_token.type == TOKEN_INCREMENT || parser->current_token.type == TOKEN_DECREMENT) {
+                Token inc_op_token = parser->current_token;
+                if (inc_op_token.text) inc_op_token.text = strdup(inc_op_token.text);
+                match(parser, parser->current_token.type);
 
-			ASTNode** parts = NULL;
-			int parts_count = 0;
+                ASTNode* inc_op_node = create_ast_node(AST_OPERATORS, inc_op_token);
+                ASTNode* increment_node = create_ast_node(AST_INCREMENT_EXPR, (Token){0});
+                increment_node->child_count = 2;
+                increment_node->children = malloc(sizeof(ASTNode*) * 2);
+                increment_node->children[0] = primary_node;
+                increment_node->children[1] = inc_op_node;
+                return increment_node;
+            }
+            break;
+        }
 
-			int i = 0;
-			while (i < len) {
-				if (s[i] == '$' && i + 1 < len && s[i+1] == '{') {
-					int j = i + 2;
-					while (j < len && s[j] != '}') j++;
-					if (j >= len) {
-						int rem_len = len - i;
-						char* lit = malloc(rem_len + 1);
-						strncpy(lit, s + i, rem_len);
-						lit[rem_len] = '\0';
-						Token literal_token = { .type = TOKEN_STRING, .text = lit, .line = tok.line, .column = tok.column };
-						ASTNode* lit_node = create_ast_node(AST_LITERAL, literal_token);
-						parts = realloc(parts, sizeof(ASTNode*) * (parts_count + 1));
-						parts[parts_count++] = lit_node;
-						break;
-					}
+        case TOKEN_INT_LITERAL:
+        case TOKEN_FLOAT_LITERAL:
+        case TOKEN_TRUE:
+        case TOKEN_FALSE: {
+            Token tok = parser->current_token;
+            if (tok.text) tok.text = strdup(tok.text);
+            match(parser, type);
+            primary_node = create_ast_node(AST_LITERAL, tok);
+            break;
+        }
 
-					int expr_len = j - (i + 2);
-					char* expr_txt = malloc(expr_len + 1);
-					strncpy(expr_txt, s + i + 2, expr_len);
-					expr_txt[expr_len] = '\0';
+        case TOKEN_STRING: {
+            Token tok = parser->current_token;
+            if (tok.text) tok.text = strdup(tok.text);
+            match(parser, TOKEN_STRING);
 
-					Lexer* sublexer = create_lexer(expr_txt);
-					Parser subparser;
-					init_parser(&subparser, sublexer);
-					ASTNode* expr_node = parse_expression(&subparser);
-					free_parser(&subparser);
-					free(sublexer);
-					free(expr_txt);
+            char* s = tok.text ? tok.text : "";
+            int len = strlen(s);
+            int has_interp = 0;
+            for (int i = 0; i < len - 1; i++) if (s[i] == '$' && s[i+1] == '{') { has_interp = 1; break; }
 
-					if (!expr_node) {
-						int part_len = j - i + 1;
-						char* lit = malloc(part_len + 1);
-						strncpy(lit, s + i, part_len);
-						lit[part_len] = '\0';
-						Token literal_token = { .type = TOKEN_STRING, .text = lit, .line = tok.line, .column = tok.column };
-						ASTNode* lit_node = create_ast_node(AST_LITERAL, literal_token);
-						parts = realloc(parts, sizeof(ASTNode*) * (parts_count + 1));
-						parts[parts_count++] = lit_node;
-					} else {
-						parts = realloc(parts, sizeof(ASTNode*) * (parts_count + 1));
-						parts[parts_count++] = expr_node;
-					}
+            if (!has_interp) {
+                primary_node = create_ast_node(AST_LITERAL, tok);
+                break;
+            }
 
-					i = j + 1;
-					continue;
-				}
+            ASTNode** parts = NULL;
+            int parts_count = 0;
+            int i = 0;
 
-				int start = i;
-				while (i < len) {
-					if (s[i] == '$' && i + 1 < len && s[i+1] == '{') break;
-					i++;
-				}
-				int seg_len = i - start;
-				if (seg_len > 0) {
-					char* lit = malloc(seg_len + 1);
-					strncpy(lit, s + start, seg_len);
-					lit[seg_len] = '\0';
-					Token literal_token = { .type = TOKEN_STRING, .text = lit, .line = tok.line, .column = tok.column };
-					ASTNode* lit_node = create_ast_node(AST_LITERAL, literal_token);
-					parts = realloc(parts, sizeof(ASTNode*) * (parts_count + 1));
-					parts[parts_count++] = lit_node;
-				}
-			}
+            while (i < len) {
+                if (s[i] == '$' && i + 1 < len && s[i+1] == '{') {
+                    int j = i + 2; while (j < len && s[j] != '}') j++;
+                    if (j >= len) {
+                        int rem_len = len - i;
+                        char* lit = malloc(rem_len + 1);
+                        strncpy(lit, s + i, rem_len);
+                        lit[rem_len] = '\0';
+                        Token literal_token = { TOKEN_STRING, lit, tok.line, tok.column };
+                        ASTNode* lit_node = create_ast_node(AST_LITERAL, literal_token);
+                        parts = realloc(parts, sizeof(ASTNode*) * (parts_count + 1));
+                        parts[parts_count++] = lit_node;
+                        break;
+                    }
 
-			free(tok.text);
+                    int expr_len = j - (i + 2);
+                    char* expr_txt = malloc(expr_len + 1);
+                    strncpy(expr_txt, s + i + 2, expr_len);
+                    expr_txt[expr_len] = '\0';
 
-			if (parts_count == 0) return NULL;
-			if (parts_count == 1) { primary_node = parts[0]; break; }
+                    Lexer* sublexer = create_lexer(expr_txt);
+                    Parser subparser;
+                    init_parser(&subparser, sublexer);
+                    ASTNode* expr_node = parse_expression(&subparser);
+                    free_parser(&subparser);
+                    free(sublexer);
+                    free(expr_txt);
 
-			ASTNode* left = parts[0];
-			for (int p = 1; p < parts_count; p++) {
-				Token plus_tok = { .type = TOKEN_PLUS, .text = strdup("+"), .line = tok.line, .column = tok.column };
-				ASTNode* plus_node = create_ast_node(AST_BINARY_OP, plus_tok);
-				plus_node->child_count = 2;
-				plus_node->children = malloc(sizeof(ASTNode*) * 2);
-				plus_node->children[0] = left;
-				plus_node->children[1] = parts[p];
-				left = plus_node;
-			}
+                    if (!expr_node) {
+                        int part_len = j - i + 1;
+                        char* lit = malloc(part_len + 1);
+                        strncpy(lit, s + i, part_len);
+                        lit[part_len] = '\0';
+                        Token literal_token = { TOKEN_STRING, lit, tok.line, tok.column };
+                        ASTNode* lit_node = create_ast_node(AST_LITERAL, literal_token);
+                        parts = realloc(parts, sizeof(ASTNode*) * (parts_count + 1));
+                        parts[parts_count++] = lit_node;
+                    } else {
+                        parts = realloc(parts, sizeof(ASTNode*) * (parts_count + 1));
+                        parts[parts_count++] = expr_node;
+                    }
 
-			free(parts);
-			primary_node = left;
-			break;
-		}
+                    i = j + 1;
+                    continue;
+                }
 
-		case TOKEN_LPAREN: {
-			// Support cast syntax: (type)expr -> AST_CAST_EXPR
-			match(parser, TOKEN_LPAREN);
-			if (parser->current_token.type == TOKEN_INT || parser->current_token.type == TOKEN_FLOAT ||
-				parser->current_token.type == TOKEN_STRING || parser->current_token.type == TOKEN_BOOLEAN ||
-				parser->current_token.type == TOKEN_CHAR) {
-				// It's a cast. Capture the type token and consume it.
-				Token type_token = parser->current_token;
-				if (type_token.text) type_token.text = strdup(type_token.text);
-				match(parser, parser->current_token.type);
-				if (!expect(parser, TOKEN_RPAREN, PARSER_EXPECTED, "')' after cast type", parser->current_token.text)) return NULL;
-				match(parser, TOKEN_RPAREN);
+                int start = i;
+                while (i < len && !(s[i] == '$' && i + 1 < len && s[i+1] == '{')) i++;
+                int seg_len = i - start;
+                if (seg_len > 0) {
+                    char* lit = malloc(seg_len + 1);
+                    strncpy(lit, s + start, seg_len);
+                    lit[seg_len] = '\0';
+                    Token literal_token = { TOKEN_STRING, lit, tok.line, tok.column };
+                    ASTNode* lit_node = create_ast_node(AST_LITERAL, literal_token);
+                    parts = realloc(parts, sizeof(ASTNode*) * (parts_count + 1));
+                    parts[parts_count++] = lit_node;
+                }
+            }
 
-				// After a cast type, parse the primary expression being cast.
-				ASTNode* expr = parse_primary(parser);
-				if (!expr) {
-					set_error(parser, PARSER_EXPECTED, "expression after cast", parser->current_token.text);
-					return NULL;
-				}
+            free(tok.text);
+            if (parts_count == 0) return NULL;
+            if (parts_count == 1) { primary_node = parts[0]; break; }
 
-				ASTNode* type_node = create_ast_node(AST_TYPE, type_token);
-				ASTNode* cast_node = create_ast_node(AST_CAST_EXPR, (Token){0});
-				cast_node->child_count = 2;
-				cast_node->children = malloc(sizeof(ASTNode*) * 2);
-				cast_node->children[0] = type_node;
-				cast_node->children[1] = expr;
-				primary_node = cast_node;
-				break;
-			}
+            ASTNode* left = parts[0];
+            for (int p = 1; p < parts_count; p++) {
+                Token plus_tok = { TOKEN_PLUS, strdup("+"), tok.line, tok.column };
+                ASTNode* plus_node = create_ast_node(AST_BINARY_OP, plus_tok);
+                plus_node->child_count = 2;
+                plus_node->children = malloc(sizeof(ASTNode*) * 2);
+                plus_node->children[0] = left;
+                plus_node->children[1] = parts[p];
+                left = plus_node;
+            }
 
-			// Otherwise, normal parenthesized expression
-			ASTNode* expr = parse_binary(parser);
-			if (!expr) {
-				set_error(parser, PARSER_EXPECTED, "expression inside parentheses", parser->current_token.text);
-				return NULL;
-			}
-			if (parser->current_token.type != TOKEN_RPAREN) {
-				set_error(parser, PARSER_EXPECTED, "')'", parser->current_token.text);
-				return NULL;
-			}
-			match(parser, TOKEN_RPAREN);
-			primary_node = expr;
-			break;
-		}
+            free(parts);
+            primary_node = left;
+            break;
+        }
 
-		case TOKEN_ARRAY: {
-			match(parser, TOKEN_ARRAY);
-			ASTNode* array_node = create_ast_node(AST_ARRAY_LITERAL, parser->current_token);
-			array_node->child_count = 0;
-			array_node->children = NULL;
+        case TOKEN_LPAREN: {
+            match(parser, TOKEN_LPAREN);
 
-			while (parser->current_token.type != TOKEN_RBRACE) {
-				ASTNode* element = parse_binary(parser);
-				if (!element) {
-					set_error(parser, PARSER_EXPECTED, "array element", parser->current_token.text);
-					return NULL;
-				}
-				array_node->child_count++;
-				array_node->children = realloc(array_node->children, sizeof(ASTNode*) * array_node->child_count);
-				array_node->children[array_node->child_count - 1] = element;
+            // Cast: (type)expr
+            if (parser->current_token.type == TOKEN_INT || parser->current_token.type == TOKEN_FLOAT ||
+                parser->current_token.type == TOKEN_STRING || parser->current_token.type == TOKEN_BOOLEAN ||
+                parser->current_token.type == TOKEN_CHAR) {
+                Token type_token = parser->current_token;
+                if (type_token.text) type_token.text = strdup(type_token.text);
+                match(parser, parser->current_token.type);
+                if (!expect(parser, TOKEN_RPAREN, PARSER_EXPECTED, "')' after cast type", parser->current_token.text)) return NULL;
+                match(parser, TOKEN_RPAREN);
 
-				if (parser->current_token.type == TOKEN_COMMA) {
-					match(parser, TOKEN_COMMA);
-				} else {
-					break;
-				}
-			}
+                ASTNode* expr = parse_primary(parser);
+                if (!expr) { set_error(parser, PARSER_EXPECTED, "expression after cast", parser->current_token.text); return NULL; }
 
-			if (parser->current_token.type != TOKEN_RBRACE) {
-				set_error(parser, PARSER_EXPECTED, "'}' at end of array", parser->current_token.text);
-				return NULL;
-			}
-			match(parser, TOKEN_RBRACE);
-			primary_node = array_node;
-			break;
-		}
+                ASTNode* type_node = create_ast_node(AST_TYPE, type_token);
+                ASTNode* cast_node = create_ast_node(AST_CAST_EXPR, (Token){0});
+                cast_node->child_count = 2;
+                cast_node->children = malloc(sizeof(ASTNode*) * 2);
+                cast_node->children[0] = type_node;
+                cast_node->children[1] = expr;
+                primary_node = cast_node;
+                break;
+            }
 
-		case TOKEN_MINUS:
-		case TOKEN_PLUS: {
-			Token op_token = parser->current_token;
-			if (op_token.text) op_token.text = strdup(op_token.text);
-			match(parser, type);
-			ASTNode* operand = parse_primary(parser);
-			if (!operand) {
-				set_error(parser, PARSER_EXPECTED, "expression after unary operator", op_token.text);
-				return NULL;
-			}
-			ASTNode* node = create_ast_node(AST_UNARY_OP, op_token);
-			node->child_count = 1;
-			node->children = malloc(sizeof(ASTNode*));
-			node->children[0] = operand;
-			primary_node = node;
-			break;
-		}
+            // Normal parenthesized expression
+            ASTNode* expr = parse_binary(parser);
+            if (!expr) { set_error(parser, PARSER_EXPECTED, "expression inside parentheses", parser->current_token.text); return NULL; }
+            if (parser->current_token.type != TOKEN_RPAREN) { set_error(parser, PARSER_EXPECTED, "')'", parser->current_token.text); return NULL; }
+            match(parser, TOKEN_RPAREN);
+            primary_node = expr;
+            break;
+        }
 
-		default:
-			set_error(parser, PARSER_UNEXPECTED_TOKEN, parser->current_token.text);
-			return NULL;
-	}
+        case TOKEN_MINUS:
+        case TOKEN_PLUS: {
+            Token op_token = parser->current_token;
+            if (op_token.text) op_token.text = strdup(op_token.text);
+            match(parser, type);
+            ASTNode* operand = parse_primary(parser);
+            if (!operand) { set_error(parser, PARSER_EXPECTED, "expression after unary operator", op_token.text); return NULL; }
+            ASTNode* node = create_ast_node(AST_UNARY_OP, op_token);
+            node->child_count = 1;
+            node->children = malloc(sizeof(ASTNode*));
+            node->children[0] = operand;
+            primary_node = node;
+            break;
+        }
 
-	if (primary_node && (parser->current_token.type == TOKEN_INCREMENT || parser->current_token.type == TOKEN_DECREMENT)) {
-		Token inc_op_token = parser->current_token;
-		if (inc_op_token.text) inc_op_token.text = strdup(inc_op_token.text);
-		match(parser, parser->current_token.type);
-		ASTNode* inc_op_node = create_ast_node(AST_OPERATORS, inc_op_token);
-		ASTNode* increment_node = create_ast_node(AST_INCREMENT_EXPR, (Token){0});
-		increment_node->child_count = 2;
-		increment_node->children = malloc(sizeof(ASTNode*) * 2);
-		increment_node->children[0] = primary_node;
-		increment_node->children[1] = inc_op_node;
-		return increment_node;
-	}
+        default:
+            set_error(parser, PARSER_UNEXPECTED_TOKEN, parser->current_token.text);
+            return NULL;
+    }
 
-	return primary_node;
+    // Prefix/postfix increment/decrement
+    if (primary_node && (parser->current_token.type == TOKEN_INCREMENT || parser->current_token.type == TOKEN_DECREMENT)) {
+        Token inc_op_token = parser->current_token;
+        if (inc_op_token.text) inc_op_token.text = strdup(inc_op_token.text);
+        match(parser, parser->current_token.type);
+        ASTNode* inc_op_node = create_ast_node(AST_OPERATORS, inc_op_token);
+        ASTNode* increment_node = create_ast_node(AST_INCREMENT_EXPR, (Token){0});
+        increment_node->child_count = 2;
+        increment_node->children = malloc(sizeof(ASTNode*) * 2);
+        increment_node->children[0] = primary_node;
+        increment_node->children[1] = inc_op_node;
+        return increment_node;
+    }
+
+    return primary_node;
 }

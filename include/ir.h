@@ -24,6 +24,8 @@ typedef enum {
 	IR_PARAM,     // Handle function params
 	IR_CALL,      // Handle function calls
 	IR_RETURN,    // Handle function returns
+	IR_LEA,       // compute address (like LEA)
+	IR_LOAD,      // load from address in arg1 into result
 } IROp;
 
 // 

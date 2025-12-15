@@ -1,0 +1,16 @@
+include adan.io;
+
+program::int main()
+{
+    n::int[] = [1, 2, 3, 4, 5];
+    s::int = 0;
+
+    s += n[0];
+    s += n[1];
+    s += n[2];
+    s += n[3];
+    s += n[4];
+
+    print("The sum of the array elements is: " + to_string(s) + "\n");
+    return 0;
+}

@@ -53,6 +53,8 @@ typedef enum {
 	TOKEN_QUOTATION,
 	TOKEN_NOT,		     // Is used for negation. Use `!=` for checking for not-equal values.
 	TOKEN_TYPE_DECL,	 // Used when declaring a type of something, usually a variable or program.
+	TOKEN_LBRACKET,
+	TOKEN_RBRACKET,
 
 	//
 	//  Signs

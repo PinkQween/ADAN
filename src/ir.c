@@ -134,6 +134,14 @@ void print_ir() {
 				printf("%s = CALL %s\n", current->result, current->arg1);
 				break;
 			
+			case IR_LEA:
+				printf("%s = LEA %s + %s\n", current->result, current->arg1, current->arg2);
+				break;
+			
+			case IR_LOAD:
+				printf("%s = LOAD [%s]\n", current->result, current->arg1);
+				break;
+			
 			case IR_RETURN:
 				printf("RETURN %s\n", current->arg1);
 				break;
@@ -754,6 +762,32 @@ char* generate_ir(ASTNode* node) {
 		}
 
 		case AST_ARRAY_LITERAL: {
+			// If at top-level (global), emit a data initializer string so the declaration
+			// can create a proper global variable containing the array elements.
+			if (current_function == NULL) {
+				// Build comma-separated initializer: "1,2,3"
+				int buf_len = 256;
+				char* buf = malloc(buf_len);
+				if (!buf) return NULL;
+				buf[0] = '\0';
+				for (int i = 0; i < node->child_count; i++) {
+					char* element = generate_ir(node->children[i]);
+					if (!element) { free(buf); return NULL; }
+					int need = strlen(buf) + strlen(element) + 2;
+					if (need > buf_len) {
+						buf_len = need * 2;
+						char* tmp = realloc(buf, buf_len);
+						if (!tmp) { free(buf); free(element); return NULL; }
+						buf = tmp;
+					}
+					if (i > 0) strcat(buf, ",");
+					strcat(buf, element);
+					free(element);
+				}
+				return buf;
+			}
+
+			// Otherwise, for non-global array literals, push elements as params
 			for (int i = 0; i < node->child_count; i++) {
 				char* element = generate_ir(node->children[i]);
 				if (element) {
@@ -772,16 +806,26 @@ char* generate_ir(ASTNode* node) {
 			if (!array || !index) {
 				free(array);
 				free(index);
-
 				return NULL;
 			}
 
+			// scale index by element size (8 bytes) and compute address
+			char* scaled = new_temporary();
+			IRInstruction* mul_inst = create_instruction(IR_MUL, index, "8", scaled);
+			emit(mul_inst);
+
+			char* addr = new_temporary();
+			IRInstruction* lea_inst = create_instruction(IR_LEA, array, scaled, addr);
+			emit(lea_inst);
+
 			char* result = new_temporary();
-			
-			IRInstruction* access_inst = create_instruction(IR_ASSIGN, array, index, result);
-			emit(access_inst);
+			IRInstruction* load_inst = create_instruction(IR_LOAD, addr, NULL, result);
+			emit(load_inst);
+
 			free(array);
 			free(index);
+			free(scaled);
+			free(addr);
 
 			return result;
 		}

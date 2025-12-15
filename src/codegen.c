@@ -153,23 +153,66 @@ void generate_asm(IRInstruction* ir_head, LiveInterval* intervals, const TargetC
 				}
 				break;
 
-			case IR_MUL:
-				fprintf(out, "movq %s, %%rax\n", loc1);
-				fprintf(out, "imulq %s\n", loc2);
-				fprintf(out, "movq %%rax, %s\n", result_loc);
-				break;
+		case IR_LEA: {
+			// Compute effective address: result = &arg1 + arg2
+			// Load base address into r11 (use leaq for label/mem), then add scaled offset
+			if (loc1[0] == 'G' && loc1[1] == '_' ) {
+				// label (%rip)
+				fprintf(out, "leaq %s, %%r11\n", loc1);
+			} else if (strchr(loc1, '(') != NULL) {
+				// memory reference like -56(%rbp) - use LEA to get its address
+				fprintf(out, "leaq %s, %%r11\n", loc1);
+			} else {
+				fprintf(out, "movq %s, %%r11\n", loc1);
+			}
+			fprintf(out, "addq %s, %%r11\n", loc2);
+			fprintf(out, "movq %%r11, %s\n", result_loc);
+			break; }
 
-			case IR_DIV:
-				fprintf(out, "movq %s, %%rax\n", loc1);
-				fprintf(out, "cqto\n");
+		case IR_LOAD: {
+			// Load the 8-byte value pointed to by arg1 into result
+			fprintf(out, "movq %s, %%r11\n", loc1);
+			if (strchr(result_loc, '(') != NULL) {
+				// destination is memory - avoid memory to memory movq
+				fprintf(out, "movq (%%r11), %%r12\n");
+				fprintf(out, "movq %%r12, %s\n", result_loc);
+			} else {
+				fprintf(out, "movq (%%r11), %s\n", result_loc);
+			}
+			break; }
+
+		case IR_MUL: {
+			int result_is_mem = strchr(result_loc, '(') != NULL;
+			if (result_is_mem) {
+				fprintf(out, "movq %s, %%r11\n", loc1);
 				if (loc2[0] == '$') {
-					fprintf(out, "movq %s, %%r11\n", loc2);
-					fprintf(out, "idivq %%r11\n");
+					fprintf(out, "imulq %s, %%r11\n", loc2);
 				} else {
-					fprintf(out, "idivq %s\n", loc2);
+					fprintf(out, "imulq %s, %%r11\n", loc2);
 				}
-				fprintf(out, "movq %%rax, %s\n", result_loc);
-				break;
+				fprintf(out, "movq %%r11, %s\n", result_loc);
+			} else {
+				fprintf(out, "movq %s, %s\n", loc1, result_loc);
+				if (loc2[0] == '$') {
+					fprintf(out, "imulq %s, %s\n", loc2, result_loc);
+				} else {
+					fprintf(out, "imulq %s, %s\n", loc2, result_loc);
+				}
+			}
+			break; }
+
+		case IR_DIV: {
+			// Division uses rax and rdx: dividend in rax, quotient returned in rax
+			fprintf(out, "movq %s, %%rax\n", loc1);
+			fprintf(out, "cqto\n");
+			if (loc2[0] == '$') {
+				fprintf(out, "movq %s, %%r11\n", loc2);
+				fprintf(out, "idivq %%r11\n");
+			} else {
+				fprintf(out, "idivq %s\n", loc2);
+			}
+			fprintf(out, "movq %%rax, %s\n", result_loc);
+			break; }
 
 			case IR_MOD:
 				fprintf(out, "movq %s, %%rax\n", loc1);
@@ -320,6 +363,8 @@ void generate_asm(IRInstruction* ir_head, LiveInterval* intervals, const TargetC
 			case IR_PARAM: {
 				reset_args = 0;
 				if (arg_count < 8) {
+					// DEBUG: show mapping
+					fprintf(stderr, "DEBUG: IR_PARAM arg=%s loc=%s\n", current->arg1 ? current->arg1 : "(null)", loc1);
 					strcpy(arg_locs[arg_count], loc1);
 					arg_is_lea[arg_count] = (current->arg1 && strncmp(current->arg1, ".STR", 4) == 0);
 					arg_count++;
@@ -331,6 +376,8 @@ void generate_asm(IRInstruction* ir_head, LiveInterval* intervals, const TargetC
 				reset_args = 0;
 				int pass = arg_count;
 				if (pass > 6) pass = 6;
+				// DEBUG: show call and arg_count
+				fprintf(stderr, "DEBUG: IR_CALL target=%s arg_count=%d\n", current->arg1 ? current->arg1 : loc1, arg_count);
 				for (int i = 0; i < pass; i++) {
 					if (arg_is_lea[i]) {
 						fprintf(out, "leaq %s, %%%s\n", arg_locs[i], arg_regs[i]);

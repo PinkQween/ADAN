@@ -244,7 +244,8 @@ int main(int argc, char** argv) {
 	#else
 		char* register_names[] = {"rbx", "r10", "r11", "r12"};
 	#endif
-	int caller_saved[] = {0, 1};
+	// Indices of caller-saved registers within register_names: r10 (1) and r11 (2)
+	int caller_saved[] = {1, 2};
 	TargetConfig config;
 	init_target_config(&config, 4, register_names, 2, caller_saved, 8);
 	

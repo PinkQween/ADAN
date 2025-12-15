@@ -47,6 +47,7 @@ typedef enum {
 	AST_MEMBER_ACCESS,
 	AST_TYPE,
 	AST_PARAMS,
+	AST_ARRAY_DECL,
 	
 	// 
 	//  Expressions
