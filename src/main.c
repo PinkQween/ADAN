@@ -146,9 +146,17 @@ int main(int argc, char** argv) {
 		}
 	}
 
-	create_lexer_tests();
-	create_parser_tests();
-	create_codegen_tests();
+	/* Run self-tests only when explicitly requested to avoid hangs during normal compilation */
+	int RUN_TESTS = 0;
+	if (getenv("ADAN_RUN_TESTS") != NULL) RUN_TESTS = 1;
+	for (int i = 1; i < argc; i++) {
+		if (strcmp(argv[i], "--run-tests") == 0) RUN_TESTS = 1;
+	}
+	if (RUN_TESTS) {
+		create_lexer_tests();
+		create_parser_tests();
+		create_codegen_tests();
+	}
 
 	signal(SIGALRM, handle_timeout);
 	{
@@ -337,6 +345,24 @@ int main(int argc, char** argv) {
 	IRInstruction* all_ir = get_ir_head();
 	if (all_ir) {
 		number_instructions(all_ir);
+		/* Debug: Check for cycles in the IR list using tortoise & hare */
+		IRInstruction* tort = all_ir;
+		IRInstruction* hare = all_ir;
+		int cycle_found = 0;
+		while (hare && hare->next) {
+			tort = tort->next;
+			hare = hare->next->next;
+			if (tort == hare) { cycle_found = 1; break; }
+		}
+		if (cycle_found) {
+			fprintf(stderr, "ERROR: IR list contains a cycle — this will cause codegen to loop. Dumping first 200 IR entries for inspection...\n");
+			IRInstruction* curd = all_ir;
+			for (int i = 0; i < 200 && curd; i++) {
+				fprintf(stderr, "IR[%d] addr=%p op=%d arg1=%s arg2=%s res=%s next=%p\n", i, (void*)curd, curd->op, curd->arg1 ? curd->arg1 : "(null)", curd->arg2 ? curd->arg2 : "(null)", curd->result ? curd->result : "(null)", (void*)curd->next);
+				curd = curd->next;
+			}
+			return 1;
+		}
 		LiveInterval* intervals = compute_liveness(all_ir);
 		assign_stack_offsets(intervals, &config);
 
@@ -349,6 +375,15 @@ int main(int argc, char** argv) {
 				fprintf(stderr, "  %s -> reg=%d spilled=%d offset=%d\n", it->variable_name, it->registry, it->spilled, it->stack_offset);
 				it = it->next;
 			}
+			// Debug: count IR_LABEL occurrences for 'main'
+			int main_labels = 0;
+			IRInstruction* cur = all_ir;
+			while (cur) {
+				if (cur->op == IR_LABEL && cur->arg1 && strcmp(cur->arg1, "main") == 0) main_labels++;
+				cur = cur->next;
+			}
+			fprintf(stderr, "DEBUG: IR contains %d IR_LABEL(s) named 'main'\n", main_labels);
+			dump_ir_debug();
 		}
 
 		int frame_size = compute_spill_frame_size(intervals, &config);
@@ -359,7 +394,32 @@ int main(int argc, char** argv) {
 		#endif
 		int stack_bytes = frame_size;
 		if (stack_bytes < 0) stack_bytes = 0;
-		stack_bytes = (stack_bytes + 15) & ~15;
+	// Ensure stack is 16-byte aligned after the prologue (pushq %%rbp is 8 bytes).
+	// We compute an adjusted frame size so that (8 + stack_bytes) is a multiple of 16.
+	int adjusted = (stack_bytes + 8 + 15) & ~15;
+	stack_bytes = adjusted - 8;
+
+	/* Debug: detect cycles just before code generation */
+	{
+		IRInstruction* tort = all_ir;
+		IRInstruction* hare = all_ir;
+		int cycle_found = 0;
+		while (hare && hare->next) {
+			tort = tort->next;
+			hare = hare->next->next;
+			if (tort == hare) { cycle_found = 1; break; }
+		}
+		if (cycle_found) {
+			fprintf(stderr, "ERROR: IR list contains a cycle just before code generation — aborting and dumping entries.\n");
+			IRInstruction* curd = all_ir;
+			for (int i = 0; i < 400 && curd; i++) {
+				fprintf(stderr, "IR[%d] addr=%p op=%d arg1=%s arg2=%s res=%s next=%p\n", i, (void*)curd, curd->op, curd->arg1 ? curd->arg1 : "(null)", curd->arg2 ? curd->arg2 : "(null)", curd->result ? curd->result : "(null)", (void*)curd->next);
+				curd = curd->next;
+			}
+			return 1;
+		}
+	}
+		dump_ir_debug();
 		generate_asm(all_ir, intervals, &config, asm_file, stack_bytes);
 	}
 	

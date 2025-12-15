@@ -1,6 +1,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include "ir.h"
 #include "ast.h"
 
@@ -44,6 +45,8 @@ char* new_temporary() {
 	return strdup(buffer);
 }
 
+static int instruction_counter = 0;
+
 IRInstruction* create_instruction(IROp op, char* arg1, char* arg2, char* result) {
 	IRInstruction* new_instruction = malloc(sizeof(IRInstruction));
 	
@@ -52,6 +55,7 @@ IRInstruction* create_instruction(IROp op, char* arg1, char* arg2, char* result)
 	new_instruction->arg2 = arg2 ? strdup(arg2) : NULL;
 	new_instruction->result = result ? strdup(result) : NULL;
 	new_instruction->next = NULL;
+	new_instruction->index = instruction_counter++;
 
 	return new_instruction;
 }
@@ -270,6 +274,9 @@ char* generate_ir(ASTNode* node) {
 
 			if ((left_type == TYPE_STRING) || (right_type == TYPE_STRING)) {
 				if (left_type != TYPE_STRING) {
+				// If the left child is already a call to to_string, skip re-casting
+				bool left_is_to_string = (node->children[0] && node->children[0]->type == AST_FUNCTION_CALL && node->children[0]->children[0] && node->children[0]->children[0]->token.text && strcmp(node->children[0]->children[0]->token.text, "to_string") == 0);
+				if (!left_is_to_string) {
 					char* tmp_cast = new_temporary();
 					IRInstruction* param = create_instruction(IR_PARAM, left, NULL, NULL);
 					IRInstruction* call = create_instruction(IR_CALL, "to_string", NULL, tmp_cast);
@@ -278,8 +285,12 @@ char* generate_ir(ASTNode* node) {
 					free(left);
 					left = tmp_cast;
 				}
+			}
 
-				if (right_type != TYPE_STRING) {
+			if (right_type != TYPE_STRING) {
+				// If the right child is already a call to to_string, skip re-casting
+				bool right_is_to_string = (node->children[1] && node->children[1]->type == AST_FUNCTION_CALL && node->children[1]->children[0] && node->children[1]->children[0]->token.text && strcmp(node->children[1]->children[0]->token.text, "to_string") == 0);
+				if (!right_is_to_string) {
 					char* tmp_cast = new_temporary();
 					IRInstruction* param = create_instruction(IR_PARAM, right, NULL, NULL);
 					IRInstruction* call = create_instruction(IR_CALL, "to_string", NULL, tmp_cast);
@@ -300,6 +311,7 @@ char* generate_ir(ASTNode* node) {
 				free(left);
 				free(right);
 				return tmp_concat;
+			}
 			}
 
 			char* temp = new_temporary();
@@ -833,6 +845,25 @@ char* generate_ir(ASTNode* node) {
 		default:
 			return NULL;
 	}
+}
+
+void dump_ir_debug() {
+	IRInstruction* cur = ir_head;
+	void* seen[8192]; int seenc = 0;
+	int i = 0;
+	while (cur != NULL && i < 1000) {
+		for (int k = 0; k < seenc; k++) {
+			if (seen[k] == (void*)cur) {
+				fprintf(stderr, "DUMP: detected cycle at node addr=%p idx=%d\n", (void*)cur, cur->index);
+				return;
+			}
+		}
+		if (seenc < (int)(sizeof(seen)/sizeof(seen[0]))) seen[seenc++] = (void*)cur;
+		fprintf(stderr, "IR[%d] addr=%p idx=%d op=%d arg1=%s arg2=%s res=%s next=%p\n", i, (void*)cur, cur->index, cur->op, cur->arg1 ? cur->arg1 : "(null)", cur->arg2 ? cur->arg2 : "(null)", cur->result ? cur->result : "(null)", (void*)cur->next);
+		cur = cur->next;
+		i++;
+	}
+	if (cur != NULL) fprintf(stderr, "DUMP: truncated after %d entries\n", i);
 }
 
 void free_ir() {

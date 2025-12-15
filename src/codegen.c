@@ -13,6 +13,7 @@
 #endif
 
 static int last_frame_adjust = 0;
+static int epilogue_emitted = 0;
 
 static const char* mangle_symbol(const char* name) {
 	#ifdef __APPLE__
@@ -113,7 +114,23 @@ void generate_asm(IRInstruction* ir_head, LiveInterval* intervals, const TargetC
 
 	bool in_function = false;
 
-	while (current != NULL) {
+	void* _seen_nodes[8192];
+int _seen_count = 0;
+while (current != NULL) {
+		/* detect cycles defensively: if we've seen this node before, abort the walk */
+		int _already = 0;
+		for (int _i = 0; _i < _seen_count; _i++) {
+			if (_seen_nodes[_i] == (void*)current) { _already = 1; break; }
+		}
+		if (_already) {
+			fprintf(stderr, "ERROR: generate_asm detected IR list cycle at node %p; aborting assembly walk\n", (void*)current);
+			break;
+		}
+		if (_seen_count < (int)(sizeof(_seen_nodes)/sizeof(_seen_nodes[0]))) _seen_nodes[_seen_count++] = (void*)current;
+
+		/* TRACE: show current node for debugging traversal order */
+		fprintf(stderr, "TRACE: generate_asm visiting addr=%p idx=%d op=%d\n", (void*)current, current->index, current->op);
+
 		loc1[0] = '\0'; 
 		loc2[0] = '\0'; 
 		result_loc[0] = '\0';
@@ -244,6 +261,7 @@ void generate_asm(IRInstruction* ir_head, LiveInterval* intervals, const TargetC
 			
 			case IR_LABEL: {
 				int is_block_label = (current->arg1 && current->arg1[0] == '_');
+				fprintf(stderr, "DEBUG: generate_asm/IR_LABEL emit name=%s block=%d\n", current->arg1 ? current->arg1 : "(null)", is_block_label);
 				if (!is_block_label) {
 					if (in_function) emit_epilogue(out, cfg);
 					#ifdef __APPLE__
@@ -381,31 +399,32 @@ void generate_asm(IRInstruction* ir_head, LiveInterval* intervals, const TargetC
 				for (int i = 0; i < pass; i++) {
 					if (arg_is_lea[i]) {
 						fprintf(out, "leaq %s, %%%s\n", arg_locs[i], arg_regs[i]);
-					} else {
-						fprintf(out, "movq %s, %%%s\n", arg_locs[i], arg_regs[i]);
-					}
+					fprintf(stderr, "DEBUG_ASM: leaq %s -> %%%s\n", arg_locs[i], arg_regs[i]);
+				} else {
+					fprintf(out, "movq %s, %%%s\n", arg_locs[i], arg_regs[i]);
+					fprintf(stderr, "DEBUG_ASM: movq %s -> %%%s\n", arg_locs[i], arg_regs[i]);
 				}
-				arg_count = 0;
-				const char* target = current->arg1 ? current->arg1 : loc1;
-				#ifdef __APPLE__
-					fprintf(out, "call _%s\n", target);
-				#else
-					fprintf(out, "call %s\n", target);
-				#endif
-				fprintf(out, "movq %%rax, %s\n", result_loc);
-				break;
 			}
-
-			default:
-				break;
+			arg_count = 0;
+			const char* target = current->arg1 ? current->arg1 : loc1;
+			#ifdef __APPLE__
+				fprintf(out, "call _%s\n", target);
+			#else
+				fprintf(out, "call %s\n", target);
+			#endif
+			fprintf(out, "movq %%rax, %s\n", result_loc);
+			fprintf(stderr, "DEBUG_ASM: movq %%rax -> %s\n", result_loc);
+			break;
 		}
 
 		if (reset_args) arg_count = 0;
 
 		current = current->next;
+		fprintf(stderr, "ADVANCE: next=%p\n", (void*)current);
 	}
 
 	if (in_function) emit_epilogue(out, cfg);
+}
 }
 
 void emit_prologue(FILE* out, const TargetConfig* cfg, int stack_bytes) {
@@ -413,6 +432,7 @@ void emit_prologue(FILE* out, const TargetConfig* cfg, int stack_bytes) {
 	if (stack_bytes < 0) stack_bytes = 0;
 
 	last_frame_adjust = stack_bytes;
+	epilogue_emitted = 0; /* reset epilogue flag at function entry */
 
 	// TODO: Full ARM64 code generation requires rewriting all instruction generation
 	fprintf(out, "\tpushq %%rbp\n");
@@ -424,12 +444,16 @@ void emit_prologue(FILE* out, const TargetConfig* cfg, int stack_bytes) {
 
 void emit_epilogue(FILE* out, const TargetConfig* cfg) {
 	if (out == NULL) return;
+	if (epilogue_emitted) return; /* avoid emitting the same epilogue more than once */
 	// TODO: Full ARM64 code generation requires rewriting all instruction generation
 	if (last_frame_adjust > 0) {
 		fprintf(out, "addq $%d, %%rsp\n", last_frame_adjust);
+		/* prevent double-emission of the frame adjust if called again */
+		last_frame_adjust = 0;
 	}
 	fprintf(out, "popq %%rbp\n");
 	fprintf(out, "ret\n");
+	epilogue_emitted = 1;
 }
 
 void assign_stack_offsets(LiveInterval* intervals, const TargetConfig* cfg) {

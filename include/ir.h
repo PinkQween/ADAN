@@ -66,6 +66,8 @@ void emit(IRInstruction* instruction);
 
 void print_ir();
 
+void dump_ir_debug();
+
 char* generate_ir(ASTNode* node);
 
 IRInstruction* get_ir_head();
