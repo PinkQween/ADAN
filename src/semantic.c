@@ -263,7 +263,12 @@ void analyze_program(ASTNode* func_node, SymbolTable* table) {
 			Type param_type = get_expression_type(param->children[1], table);
 
 			const char* param_name = param->children[0]->token.text;
-			if (!add_symbol(table, param_name, param_type, param)) {
+			bool added = add_symbol(table, param_name, param_type, param);
+			fprintf(stderr, "DEBUG: param node type=%s child0_type=%s child0_text='%s' child1_type=%s child1_text='%s' | added param '%s' type=%d added=%d\n",
+				node_type_to_string(param->type), node_type_to_string(param->children[0]->type), param->children[0]->token.text ? param->children[0]->token.text : "(null)",
+				node_type_to_string(param->children[1]->type), param->children[1]->token.text ? param->children[1]->token.text : "(null)",
+				param_name ? param_name : "(null)", (int)param_type, (int)added);
+			if (!added) {
 				semantic_error(param, SemanticErrorMessages[SEMANTIC_DUPLICATE_SYMBOL], param_name);
 			}
 		}
@@ -444,20 +449,23 @@ void analyze_declaration(ASTNode* declaration_node, SymbolTable* table) {
 		if (is_array_decl) {
 			// initializer must be an array literal and element type must match base_type
 			if (expression_node->type != AST_ARRAY_LITERAL) {
-				semantic_error(declaration_node, SemanticErrorMessages[SEMANTIC_TYPE_MISMATCH], "array", expression_node->token.text ? expression_node->token.text : "value");
-				return;
-			}
+				fprintf(stderr, "DEBUG: declaration array mismatch: type_node='%s' base_type=%d actual_type=%d expr_token='%s' expr_type=%d\n", type_node->token.text ? type_node->token.text : "(null)", (int)base_type, (int)actual_type, expression_node->token.text ? expression_node->token.text : "(null)", expression_node->type);
+                semantic_error(declaration_node, SemanticErrorMessages[SEMANTIC_TYPE_MISMATCH], type_to_string(actual_type), type_to_string(TYPE_ARRAY));
+                return;
+            }
 
 			if (expression_node->child_count > 0) {
 				Type first_elem_type = get_expression_type(expression_node->children[0], table);
 					if (first_elem_type != base_type) {
-					semantic_error(declaration_node, SemanticErrorMessages[SEMANTIC_TYPE_MISMATCH], type_node->token.text, expression_node->children[0]->token.text);
+					fprintf(stderr, "DEBUG: declaration array elem mismatch: type_node='%s' base_type=%d first_elem_type=%d elem_token='%s' elem_type=%d\n", type_node->token.text ? type_node->token.text : "(null)", (int)base_type, (int)first_elem_type, expression_node->children[0]->token.text ? expression_node->children[0]->token.text : "(null)", expression_node->children[0]->type);
+					semantic_error(declaration_node, SemanticErrorMessages[SEMANTIC_TYPE_MISMATCH], type_to_string(first_elem_type), type_to_string(base_type));
 					return;
 				}
-			}
+			} 
 		} else {
 			if (actual_type != base_type) {
-				semantic_error(declaration_node, SemanticErrorMessages[SEMANTIC_TYPE_MISMATCH], type_node->token.text, expression_node->token.text);
+				fprintf(stderr, "DEBUG: declaration mismatch: type_node='%s' base_type=%d actual_type=%d expr_token='%s' expr_type=%d\n", type_node->token.text ? type_node->token.text : "(null)", (int)base_type, (int)actual_type, expression_node->token.text ? expression_node->token.text : "(null)", expression_node->type);
+				semantic_error(declaration_node, SemanticErrorMessages[SEMANTIC_TYPE_MISMATCH], type_to_string(actual_type), type_to_string(base_type));
 				return;
 			}
 		}
@@ -489,6 +497,8 @@ void analyze_assignment(ASTNode* assignment_node, SymbolTable* table) {
 	//  STRICT: No implicit type conversion in assignment
 	// 
 	if (!check_type_compatibility(identifier_symbol->type, expression_type)) {
+		// Temporary debug: print numeric enum values and identifier name to help diagnose weird type printing
+		fprintf(stderr, "DEBUG: assignment type mismatch: id='%s' id_type=%d expr_type=%d identifier_node_token='%s'\n", identifier_symbol->name ? identifier_symbol->name : "(null)", (int)identifier_symbol->type, (int)expression_type, identifier_node->token.text ? identifier_node->token.text : "(null)");
 		semantic_error(assignment_node, SemanticErrorMessages[SEMANTIC_TYPE_MISMATCH], type_to_string(expression_type), type_to_string(identifier_symbol->type));
 		return;
 	}
@@ -878,6 +888,16 @@ Type analyze_binary_op(ASTNode* binary_node, SymbolTable* table) {
 	Type right_type = get_expression_type(binary_node->children[1], table);
 
 	if (left_type == TYPE_UNKNOWN || right_type == TYPE_UNKNOWN) {
+		fprintf(stderr, "DEBUG: binary op child unknown: op='%s' left_tok='%s' right_tok='%s' left_type=%d right_type=%d\n", binary_node->token.text ? binary_node->token.text : "(null)", 
+			binary_node->children[0] && binary_node->children[0]->token.text ? binary_node->children[0]->token.text : "(null)",
+			binary_node->children[1] && binary_node->children[1]->token.text ? binary_node->children[1]->token.text : "(null)",
+			(int)left_type, (int)right_type);
+		if (left_type == TYPE_UNKNOWN && binary_node->children[0] && binary_node->children[0]->type == AST_BINARY_OP) {
+			ASTNode* inner = binary_node->children[0];
+			Type iL = get_expression_type(inner->children[0], table);
+			Type iR = get_expression_type(inner->children[1], table);
+			fprintf(stderr, "DEBUG: inner binary op: op='%s' iL_tok='%s' iR_tok='%s' iL_type=%d iR_type=%d\n", inner->token.text ? inner->token.text : "(null)", inner->children[0] && inner->children[0]->token.text ? inner->children[0]->token.text : "(null)", inner->children[1] && inner->children[1]->token.text ? inner->children[1]->token.text : "(null)", (int)iL, (int)iR);
+		}
 		return TYPE_UNKNOWN;
 	}
 

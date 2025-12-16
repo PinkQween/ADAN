@@ -544,28 +544,35 @@ ASTNode* parse_params(Parser* parser) {
 	if (parser->current_token.type != TOKEN_RPAREN) {
 		while (1) {
 			Token id = parser->current_token;
+			id.text = strdup(parser->current_token.text);
 			if (!expect(parser, TOKEN_IDENTIFIER, PARSER_EXPECTED, "parameter name", parser->current_token.text)) {
+				free(id.text);
 				return NULL;
 			}
 			if (!expect(parser, TOKEN_TYPE_DECL, PARSER_EXPECTED, "'::' after parameter name", parser->current_token.text)) {
+				free(id.text);
 				return NULL;
 			}
 
 			Token type = parser->current_token;
+			type.text = strdup(parser->current_token.text);
 			if (!match(parser, TOKEN_INT) && !match(parser, TOKEN_FLOAT) &&
 				!match(parser, TOKEN_STRING) && !match(parser, TOKEN_BOOLEAN) &&
 				!match(parser, TOKEN_CHAR) && !match(parser, TOKEN_NULL) &&
 				!match(parser, TOKEN_VOID)) {
+				free(id.text);
+				free(type.text);
 				set_error(parser, PARSER_EXPECTED, "type declaration for parameter", parser->current_token.text);
 				return NULL;
 			}
 
 			ASTNode* id_node = create_ast_node(AST_IDENTIFIER, id);
 			ASTNode* param_node = create_ast_node(AST_TYPE, type);
-			if (!id_node || !param_node) {
-				set_error(parser, PARSER_FAILED_AST, "parameter");
-				return NULL;
-			}
+            printf("DEBUG: parse_params saw id='%s' (type=%d) type='%s' (type=%d)\n", id.text ? id.text : "(null)", id.type, type.text ? type.text : "(null)", type.type);
+            if (!id_node || !param_node) {
+                set_error(parser, PARSER_FAILED_AST, "parameter");
+                return NULL;
+            }
 
 			ASTNode* assign = create_ast_node(AST_ASSIGNMENT, id);
 			assign->child_count = 2;
@@ -934,15 +941,18 @@ ASTNode* parse_binary(Parser* parser) {
 		if (right_assoc && precedence <= get_node_precedence(left)) break;
 
 		Token op_token = parser->current_token;
+		if (op_token.text) op_token.text = strdup(op_token.text);
 		match(parser, op_type);
 
 		ASTNode* right = parse_primary(parser);
 		if (!right) {
 			set_error(parser, PARSER_EXPECTED, "expression after '%s'", op_token.text);
+			if (op_token.text) free(op_token.text);
 			return left;
 		}
 
 		ASTNode* new_node = create_ast_node(AST_BINARY_OP, op_token);
+		if (op_token.text) free(op_token.text);
 		
 		new_node->child_count = 2;
 		new_node->children = malloc(sizeof(ASTNode*) * 2);
@@ -964,15 +974,18 @@ ASTNode* parse_unary(Parser* parser) {
 
 	if (op_type == TOKEN_MINUS || op_type == TOKEN_NOT) {
 		Token op_token = parser->current_token;
+		if (op_token.text) op_token.text = strdup(op_token.text);
 		match(parser, op_type);
 
 		ASTNode* operand = parse_unary(parser);
 		if (!operand) {
 			set_error(parser, PARSER_EXPECTED, "expression after unary operator '%s'", op_token.text);
+			if (op_token.text) free(op_token.text);
 			return NULL;
 		}
 
 		ASTNode* node = create_ast_node(AST_UNARY_OP, op_token);
+		if (op_token.text) free(op_token.text);
 		
 		node->child_count = 1;
 		node->children = malloc(sizeof(ASTNode*));
@@ -1002,6 +1015,7 @@ ASTNode* parse_if_statement(Parser* parser) {
 		condition = left;
 	} else {
 		Token op = parser->current_token;
+		if (op.text) op.text = strdup(op.text);
 		TokenType t = op.type;
 
 		if (t != TOKEN_EQUALS && t != TOKEN_GREATER &&

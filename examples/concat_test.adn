@@ -1,0 +1,7 @@
+include adan.io;
+
+program::int main()
+{
+    print("The value is: " + to_string(42));
+    return 0;
+}

@@ -47,6 +47,19 @@ char* new_temporary() {
 
 static int instruction_counter = 0;
 
+#include <execinfo.h>
+
+static void ir_print_backtrace() {
+	void* bt[32];
+	int bt_size = backtrace(bt, 32);
+	char** bt_syms = backtrace_symbols(bt, bt_size);
+	fprintf(stderr, "IR_BACKTRACE (%d):\n", bt_size);
+	if (bt_syms) {
+		for (int i = 0; i < bt_size; i++) fprintf(stderr, "  %s\n", bt_syms[i]);
+		free(bt_syms);
+	}
+}
+
 IRInstruction* create_instruction(IROp op, char* arg1, char* arg2, char* result) {
 	IRInstruction* new_instruction = malloc(sizeof(IRInstruction));
 	
@@ -57,6 +70,10 @@ IRInstruction* create_instruction(IROp op, char* arg1, char* arg2, char* result)
 	new_instruction->next = NULL;
 	new_instruction->index = instruction_counter++;
 
+	/* Debug: log each creation with a backtrace to help track provenance of instructions */
+	fprintf(stderr, "CREATE_INST: addr=%p idx=%d op=%d arg1=%s arg2=%s res=%s\n", (void*)new_instruction, new_instruction->index, new_instruction->op, new_instruction->arg1 ? new_instruction->arg1 : "(null)", new_instruction->arg2 ? new_instruction->arg2 : "(null)", new_instruction->result ? new_instruction->result : "(null)");
+	ir_print_backtrace();
+
 	return new_instruction;
 }
 
@@ -64,7 +81,23 @@ void emit(IRInstruction* instruction) {
 	if (ir_head == NULL) {
 		ir_head = instruction;
 		ir_tail = instruction;
+		fprintf(stderr, "EMIT: head=%p idx=%d\n", (void*)instruction, instruction->index);
 	} else {
+		fprintf(stderr, "EMIT: linking prev=%p idx=%d -> new=%p idx=%d\n", (void*)ir_tail, ir_tail->index, (void*)instruction, instruction->index);
+		/* Debug: record a backtrace at the moment an instruction is linked to help identify unexpected pointer assignments */
+		ir_print_backtrace();
+
+		/* Defensive check: prev->next should be NULL before linking. If it's not, dump useful debug
+		   info and abort so we can capture the exact backtrace and IR state where double-linking
+		   or unexpected pointer writes occur. */
+		if (ir_tail->next != NULL) {
+			fprintf(stderr, "EMIT_ERROR: prev->next already set! prev=%p idx=%d prev->next=%p\n", (void*)ir_tail, ir_tail->index, (void*)ir_tail->next);
+			fprintf(stderr, "Offending new instruction=%p idx=%d\n", (void*)instruction, instruction->index);
+			ir_print_backtrace();
+			dump_ir_debug();
+			abort();
+		}
+
 		ir_tail->next = instruction;
 		ir_tail = instruction;
 	}
@@ -299,22 +332,22 @@ char* generate_ir(ASTNode* node) {
 					free(right);
 					right = tmp_cast;
 				}
-
-				char* tmp_concat = new_temporary();
-				IRInstruction* param1 = create_instruction(IR_PARAM, left, NULL, NULL);
-				IRInstruction* param2 = create_instruction(IR_PARAM, right, NULL, NULL);
-				IRInstruction* call_concat = create_instruction(IR_CALL, "concat", NULL, tmp_concat);
-				emit(param1);
-				emit(param2);
-				emit(call_concat);
-
-				free(left);
-				free(right);
-				return tmp_concat;
-			}
 			}
 
-			char* temp = new_temporary();
+			char* tmp_concat = new_temporary();
+			IRInstruction* param1 = create_instruction(IR_PARAM, left, NULL, NULL);
+			IRInstruction* param2 = create_instruction(IR_PARAM, right, NULL, NULL);
+			IRInstruction* call_concat = create_instruction(IR_CALL, "concat", NULL, tmp_concat);
+			emit(param1);
+			emit(param2);
+			emit(call_concat);
+
+					free(left);
+			free(right);
+			return tmp_concat;
+		}
+
+		char* temp = new_temporary();
 			IRInstruction* new_instruction = create_instruction(opcode, left, right, temp);
             
 			emit(new_instruction);
@@ -799,7 +832,12 @@ char* generate_ir(ASTNode* node) {
 				return buf;
 			}
 
-			// Otherwise, for non-global array literals, push elements as params
+			// Otherwise, for non-global array literals, push a count param followed by elements
+			// and then call into the runtime to materialize a heap-allocated array.
+			char count_buf[32];
+			snprintf(count_buf, sizeof(count_buf), "%d", node->child_count);
+			IRInstruction* count_param = create_instruction(IR_PARAM, strdup(count_buf), NULL, NULL);
+			emit(count_param);
 			for (int i = 0; i < node->child_count; i++) {
 				char* element = generate_ir(node->children[i]);
 				if (element) {
@@ -808,7 +846,10 @@ char* generate_ir(ASTNode* node) {
 					free(element);
 				}
 			}
-			return NULL;
+			char* tmp_arr = new_temporary();
+			IRInstruction* call = create_instruction(IR_CALL, "make_array", NULL, tmp_arr);
+			emit(call);
+			return tmp_arr;
 		}
 
 		case AST_ARRAY_ACCESS: {
@@ -886,3 +927,4 @@ void free_ir() {
 		free(temp);
 	}
 }
+

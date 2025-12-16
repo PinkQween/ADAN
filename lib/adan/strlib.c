@@ -8,12 +8,38 @@
 #include "../../include/ast.h"
 
 char* concat(char* str1, char* str2) {
+	static int concat_calls = 0;
+	concat_calls++;
+	fprintf(stderr, "concat: entry #%d str1=%p str2=%p\n", concat_calls, (void*)str1, (void*)str2);
+	fflush(stderr);
+	if (!str1 || !str2) {
+		fprintf(stderr, "concat: null arg(s) str1=%p str2=%p\n", (void*)str1, (void*)str2);
+		fflush(stderr);
+		abort();
+	}
+	/* Additional diagnostic logging to catch invalid pointer cases that
+	   manifested as crashes in strlen during test runs. */
+	fprintf(stderr, "concat: DEBUG before strlen str1=%p str2=%p\n", (void*)str1, (void*)str2);
+	fflush(stderr);
+	if ((intptr_t)str1 > -4096 && (intptr_t)str1 < 4096) {
+		fprintf(stderr, "concat: str1 appears to be small-int encoded: %p\n", (void*)str1);
+		fflush(stderr);
+		abort();
+	}
+	if ((intptr_t)str2 > -4096 && (intptr_t)str2 < 4096) {
+		fprintf(stderr, "concat: str2 appears to be small-int encoded: %p\n", (void*)str2);
+		fflush(stderr);
+		abort();
+	}
 	size_t len1 = strlen(str1);
 	size_t len2 = strlen(str2);
 	char* result = malloc(len1 + len2 + 1);
 	if (!result) return NULL;
 	strcpy(result, str1);
 	strcat(result, str2);
+	/* Diagnostic: report the allocated result pointer and a short preview */
+	fprintf(stderr, "concat: exit #%d created result=%p len1=%zu len2=%zu total=%zu preview=\"%.*s\"\n", concat_calls, (void*)result, len1, len2, len1+len2, (int) (len1+len2 < 16 ? len1+len2 : 16), result);
+	fflush(stderr);
 	return result;
 }
 
@@ -171,6 +197,26 @@ int starts_with(char* s, char* prefix) {
     return strncmp(s, prefix, p) == 0;
 }
 
+#ifndef BUILDING_COMPILER_MAIN
+#include <dlfcn.h>
+
+size_t strlen(const char* s) {
+    if (!s) {
+        fprintf(stderr, "strlen: null pointer\n");
+        fflush(stderr);
+        abort();
+    }
+    if ((intptr_t)s > -4096 && (intptr_t)s < 4096) {
+        fprintf(stderr, "strlen: small-int encoded pointer: %p\n", (void*)s);
+        fflush(stderr);
+        abort();
+    }
+    static size_t (*real_strlen)(const char*) = NULL;
+    if (!real_strlen) real_strlen = (size_t(*)(const char*))dlsym(RTLD_NEXT, "strlen");
+    return real_strlen(s);
+}
+#endif
+
 char* replace_all(char* str, char* old, char* new) {
     size_t len = strlen(str);
     size_t old_len = strlen(old);
@@ -210,7 +256,20 @@ static const char* cast_internal(const void* input) {
 // without needing compiler-internal headers.
 
 const char* to_string(const void* input) {
-    return cast_internal(input);
+    void* bt[16];
+    int n = backtrace(bt, 16);
+    char** syms = backtrace_symbols(bt, n);
+    const char* out = cast_internal(input);
+    fprintf(stderr, "to_string: input=%p out=%p\n", input, out);
+    if (syms) {
+        fprintf(stderr, "to_string: backtrace (most recent call first):\n");
+        for (int i = 1; i < n; i++) {
+            fprintf(stderr, "  %s\n", syms[i]);
+        }
+        free(syms);
+    }
+    fflush(stderr);
+    return out;
 }
 
 intptr_t to_int(const void* input) {

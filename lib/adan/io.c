@@ -3,9 +3,29 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
+#include <stdarg.h>
+#include <execinfo.h>
 
 void print(const char* str) {
-	if (!str) return;
+	if (!str) {
+		fprintf(stderr, "print: null pointer\n");
+		fflush(stderr);
+		return;
+	}
+	fprintf(stderr, "print: str=%p\n", (const void*)str);
+	fflush(stderr);
+	/* Print a backtrace so we can find unexpected call sites */
+	void* bt[16];
+	int n = backtrace(bt, 16);
+	char** syms = backtrace_symbols(bt, n);
+	if (syms) {
+		fprintf(stderr, "print: backtrace (most recent call first):\n");
+		for (int i = 1; i < n; i++) {
+			fprintf(stderr, "  %s\n", syms[i]);
+		}
+		free(syms);
+	}
+	fflush(stderr);
 	printf("%s\n", str);
 	fflush(stdout);
 }
@@ -152,5 +172,24 @@ bool move_file(const char* src_path, const char* dest_path) {
 	snprintf(cmd, sizeof(cmd), "mv \"%s\" \"%s\"", src_path, dest_path);
 	int res = system(cmd);
 	return res == 0;
+}
+
+/* Runtime helper: allocate a heap array of 'count' 64-bit integers from
+   variadic arguments and return a pointer to the allocated buffer. */
+void* make_array(int count, ...) {
+    if (count <= 0) return NULL;
+    long long* arr = malloc((size_t)count * sizeof(long long));
+    if (!arr) return NULL;
+    va_list ap;
+    va_start(ap, count);
+    for (int i = 0; i < count; i++) {
+        long long v = va_arg(ap, long long);
+        arr[i] = v;
+        /* Diagnostic: print each value stored so we can verify element encoding */
+        fprintf(stderr, "make_array: stored arr[%d] = 0x%llx\n", i, (long long)arr[i]);
+        fflush(stderr);
+    }
+    va_end(ap);
+    return (void*)arr;
 }
 #endif
