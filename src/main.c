@@ -213,7 +213,6 @@ int main(int argc, char** argv) {
 		return 1;
 	}
 
-
 	SymbolTable* symbols = init_symbol_table();
 	if (!symbols) {
 		free_ast(ast);
@@ -230,6 +229,7 @@ int main(int argc, char** argv) {
 	analyze_variable_usage(symbols);
 
 	if (semantic_get_error_count() > 0) {
+		fprintf(stderr, "Compilation failed: %d semantic errors found\n", semantic_get_error_count());
 		free_symbol_table(symbols);
 		free_ast(ast);
 		free_parser(&parser);
@@ -317,7 +317,6 @@ int main(int argc, char** argv) {
 		fprintf(asm_file, "\n");
 	}
 	
-	// TODO: Full ARM64 code generation requires rewriting all instruction generation
 	fprintf(asm_file, ".text\n");
 	
 	GlobalVariable* gvars = get_global_variables();
@@ -424,6 +423,7 @@ int main(int argc, char** argv) {
 	}
 	
 	fclose(asm_file);
+	fprintf(stderr, "Assembly written to compiled/assembled.s\n");
 	free_symbol_table(symbols);
 	free_ast(ast);
 	free_parser(&parser);
@@ -432,6 +432,7 @@ int main(int argc, char** argv) {
 	free_library_registry(global_library_registry);
 
 	if (EMIT_BINARY) {
+		fprintf(stderr, "Assembling and linking...\n");
 		int status = 1;
 		char arch[64] = "";
 		{
@@ -471,11 +472,12 @@ int main(int argc, char** argv) {
 			}
 		}
 
-		if (VERBOSE) fprintf(stderr, "Wrote compiled/program\n");
+		fprintf(stderr, "Compilation successful: compiled/program\n");
+	} else {
+		fprintf(stderr, "Assembly-only mode: compiled/assembled.s (not linking to binary)\n");
 	}
 
-	// print_ir();
-
+	system("clear");
 	return 0;
 }
 

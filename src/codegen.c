@@ -271,13 +271,6 @@ while (node != NULL) {
                continue;
            }
        }
-       if (!_already) {
-           if (_seen_count < (int)(sizeof(_seen_nodes)/sizeof(_seen_nodes[0]))) _seen_nodes[_seen_count++] = (void*)current;
-           fprintf(stderr, "ADDED_SEEN: current=%p idx=%d _seen_count=%d\n", (void*)current, current->index, _seen_count);
-       } else {
-           fprintf(stderr, "SKIP_ADD_SEEN: current=%p idx=%d _seen_count=%d\n", (void*)current, current->index, _seen_count);
-       }
-
 
        /* TRACE: show current node for debugging traversal order */
        fprintf(stderr, "TRACE: generate_asm visiting addr=%p idx=%d op=%d\n", (void*)current, current->index, current->op);
